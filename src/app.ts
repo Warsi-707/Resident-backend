@@ -54,6 +54,15 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // 4. URL Normalization Middleware
 app.use((req, _res, next) => {
+  const matchedPath =
+    (req.headers['x-matched-path'] as string) ||
+    (req.headers['x-now-route-matches'] as string) ||
+    (req.headers['x-forwarded-uri'] as string);
+
+  if (matchedPath && matchedPath.startsWith('/api') && !matchedPath.startsWith('/api/index')) {
+    req.url = matchedPath;
+  }
+
   if (req.url.startsWith('/api/api/')) {
     req.url = req.url.replace(/^\/api\/api\//, '/api/');
   } else if (
@@ -102,6 +111,17 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   console.error('[Express Server Error]:', err);
   if (!res.headersSent) {
     res.status(500).json({ error: 'Internal Server Error', message: err?.message || String(err) });
+  }
+});
+
+// 10. Fallback 404 handler
+app.use((req, res) => {
+  if (!res.headersSent) {
+    res.status(404).json({
+      error: 'Endpoint not found',
+      method: req.method,
+      url: req.url,
+    });
   }
 });
 
