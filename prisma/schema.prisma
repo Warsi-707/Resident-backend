@@ -1,0 +1,165 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+model User {
+  id            String   @id @default(cuid())
+  username      String   @unique
+  passwordHash  String
+  fullName      String
+  role          String   // ADMIN, COLLECTION_STAFF, MEMBER
+  status        String   @default("ACTIVE") // ACTIVE, INACTIVE
+  memberId      String?
+  staffId       String?
+  email         String?
+  contactNumber String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Member {
+  id              String    @id @default(cuid())
+  memberCode      String    @unique // e.g. RWA-2024-001
+  fullName        String
+  houseNumber     String
+  address         String
+  contactNumber   String
+  email           String?
+  plotNumber      String?
+  block           String?
+  monthlyDueAmount Float    @default(2500)
+  status          String    @default("Active") // Active, Inactive, Suspended
+  joiningDate     String
+  username        String    @unique
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  challans        Challan[]
+  payments        Payment[]
+}
+
+model Staff {
+  id            String   @id @default(cuid())
+  staffCode     String   @unique
+  fullName      String
+  contactNumber String
+  email         String?
+  username      String   @unique
+  roleTitle     String   @default("Collection Staff")
+  status        String   @default("Active") // Active, Inactive
+  joiningDate   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Challan {
+  id              String              @id @default(cuid())
+  challanNumber   String              @unique // e.g. CH-2024-09-001
+  memberId        String
+  member          Member              @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  month           String              // e.g. "September 2024"
+  monthKey        String              // e.g. "2024-09"
+  year            Int
+  dueDate         String
+  baseAmount      Float
+  arrearsAmount   Float               @default(0)
+  totalAmount     Float
+  paidAmount      Float               @default(0)
+  balance         Float
+  status          String              @default("Unpaid") // Unpaid, Partial Paid, Paid
+  generatedDate   String
+  whatsappStatus  String              @default("PENDING") // PENDING, SENT, FAILED, DELIVERED, READ
+  whatsappSentAt  DateTime?
+  whatsappMessageId String?
+  whatsappError   String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  allocations     PaymentAllocation[]
+
+  @@unique([memberId, monthKey])
+}
+
+model Payment {
+  id              String              @id @default(cuid())
+  paymentNumber   String              @unique // e.g. PAY-2024-001
+  receiptNumber   String              @unique // e.g. REC-2024-09-001
+  memberId        String
+  member          Member              @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  amount          Float
+  paymentDate     String
+  paymentType     String              @default("Full Paid") // Full Paid, Partial Paid
+  paymentMethod   String              @default("Cash") // Cash, Online, Bank Transfer, Cheque
+  referenceNumber String?
+  relevantMonth   String              // e.g. "September 2024"
+  collectedById   String?
+  collectedByName String
+  collectedByRole String
+  notes           String?
+  isVoid          Boolean             @default(false)
+  voidReason      String?
+  voidedAt        DateTime?
+  voidedBy        String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  allocations     PaymentAllocation[]
+  receipt         Receipt?
+}
+
+model PaymentAllocation {
+  id              String   @id @default(cuid())
+  paymentId       String
+  payment         Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  challanId       String
+  challan         Challan  @relation(fields: [challanId], references: [id], onDelete: Cascade)
+  allocatedAmount Float
+  createdAt       DateTime @default(now())
+}
+
+model Receipt {
+  id            String   @id @default(cuid())
+  receiptNumber String   @unique
+  paymentId     String   @unique
+  payment       Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  generatedAt   DateTime @default(now())
+  issuedTo      String
+  issuedBy      String
+}
+
+model AssociationSettings {
+  id               String   @id @default("default-settings")
+  organizationName String   @default("Resident Welfare Association")
+  address          String   @default("Central Community Center, Block B, Sector G-11")
+  contactNumber    String   @default("+92 51 9260100")
+  currency         String   @default("Rs.")
+  defaultDueDay    Int      @default(10)
+  challanFooter    String   @default("Please pay before the 10th to avoid service interruptions.")
+  receiptFooter    String   @default("Thank you for your timely contribution towards our community.")
+  logoUrl          String?
+  challanCopies    Int      @default(1)
+  whatsappSenderNumber String? @default("+92 300 1234567")
+  whatsappAccessToken  String?
+  whatsappPhoneNumberId String?
+  updatedAt        DateTime @updatedAt
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  user        String
+  role        String
+  action      String
+  module      String
+  description String
+  ipAddress   String?
+  timestamp   Float?
+  date        String
+  time        String
+  createdAt   DateTime @default(now())
+}
