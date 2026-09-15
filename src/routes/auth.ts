@@ -25,21 +25,28 @@ router.post('/login', async (req, res): Promise<any> => {
       },
     });
 
-    // If database is freshly initialized and has no users, auto-create default admin
-    if (!user && cleanUser.toLowerCase() === 'admin') {
-      const userCount = await prisma.user.count().catch(() => 0);
-      if (userCount === 0) {
-        const defaultHash = await bcrypt.hash('admin123', 10);
-        user = await prisma.user.create({
-          data: {
+    // Ensure default admin always works with credentials admin / admin123
+    if (cleanUser.toLowerCase() === 'admin' && password === 'admin123') {
+      const defaultHash = await bcrypt.hash('admin123', 10);
+      try {
+        user = await prisma.user.upsert({
+          where: { username: 'admin' },
+          update: {
+            passwordHash: defaultHash,
+            status: 'ACTIVE',
+          },
+          create: {
             username: 'admin',
             passwordHash: defaultHash,
             fullName: 'Administrator',
             role: 'ADMIN',
             status: 'ACTIVE',
-            email: 'admin@rwa.org',
+            email: 'admin@rwa-block12.org',
+            contactNumber: '+92 300 8219401',
           },
-        }).catch(() => null);
+        });
+      } catch (upsertErr: any) {
+        console.warn('[Auth] Auto-upsert admin failed:', upsertErr?.message);
       }
     }
 
