@@ -4,6 +4,8 @@ import { prisma } from '../db';
 import { authenticateToken, generateToken, AuthenticatedRequest } from '../middleware/auth';
 import { logActivity } from '../utils/logger';
 
+import { ensureDatabaseInitialized } from '../utils/dbInit';
+
 const router = Router();
 
 // POST /api/auth/login
@@ -14,6 +16,11 @@ router.post('/login', async (req, res): Promise<any> => {
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password are required' });
     }
+
+    // Ensure database tables and default admin exist
+    await ensureDatabaseInitialized().catch((initErr) => {
+      console.warn('[Auth] Database init check skipped or failed:', initErr?.message);
+    });
 
     const cleanUser = username.trim();
     let user = await prisma.user.findFirst({
@@ -104,9 +111,13 @@ router.post('/login', async (req, res): Promise<any> => {
         contactNumber: user.contactNumber,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Login error:', error);
-    return res.status(500).json({ error: 'Internal server error during login' });
+    return res.status(500).json({
+      error: 'Failed to authenticate user',
+      message: error?.message || String(error),
+      code: error?.code || error?.name
+    });
   }
 });
 
