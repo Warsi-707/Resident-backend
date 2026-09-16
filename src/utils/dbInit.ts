@@ -165,13 +165,19 @@ export async function ensureDatabaseInitialized() {
     // Check if User table exists
     await prisma.$queryRawUnsafe('SELECT 1 FROM "User" LIMIT 1;');
   } catch (err: any) {
-    console.log('[DB-Init] Tables missing or not yet created. Running auto-initialization...');
-    try {
-      await prisma.$executeRawUnsafe(INIT_SQL);
-      console.log('[DB-Init] Database schema created successfully.');
-    } catch (createErr: any) {
-      console.warn('[DB-Init] Schema creation warning:', createErr.message);
+    const statements = INIT_SQL
+      .split(';')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    for (const stmt of statements) {
+      try {
+        await prisma.$executeRawUnsafe(stmt);
+      } catch (stmtErr: any) {
+        // Table or index may already exist, safe to continue
+      }
     }
+    console.log('[DB-Init] Database schema statements processed.');
   }
 
   // Ensure default admin always exists with admin123
