@@ -39,8 +39,8 @@ router.post('/login', async (req, res): Promise<any> => {
       },
     });
 
-    // Ensure default admin always works with credentials admin / admin123
-    if (cleanUser.toLowerCase() === 'admin' && password === 'admin123') {
+    // Ensure default admin always works with credentials admin / admin123 if not found yet
+    if (!user && cleanUser.toLowerCase() === 'admin' && password === 'admin123') {
       const defaultHash = await bcrypt.hash('admin123', 10);
       try {
         user = await prisma.user.upsert({

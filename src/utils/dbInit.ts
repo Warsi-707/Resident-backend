@@ -165,19 +165,26 @@ export async function ensureDatabaseInitialized() {
     // Check if User table exists
     await prisma.$queryRawUnsafe('SELECT 1 FROM "User" LIMIT 1;');
   } catch (err: any) {
-    const statements = INIT_SQL
-      .split(';')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    console.log('[DB-Init] Tables missing, initializing database schema...');
+    try {
+      await prisma.$executeRawUnsafe(INIT_SQL);
+      console.log('[DB-Init] Database schema created in single round-trip.');
+    } catch (batchErr: any) {
+      console.warn('[DB-Init] Batch create failed, falling back to statement loop:', batchErr?.message);
+      const statements = INIT_SQL
+        .split(';')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
 
-    for (const stmt of statements) {
-      try {
-        await prisma.$executeRawUnsafe(stmt);
-      } catch (stmtErr: any) {
-        // Table or index may already exist, safe to continue
+      for (const stmt of statements) {
+        try {
+          await prisma.$executeRawUnsafe(stmt);
+        } catch {
+          // Table or index may already exist
+        }
       }
+      console.log('[DB-Init] Database schema statements processed.');
     }
-    console.log('[DB-Init] Database schema statements processed.');
   }
 
   // Ensure default admin always exists with admin123
