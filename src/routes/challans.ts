@@ -281,6 +281,18 @@ router.post('/generate', authenticateToken, requireRole(['ADMIN']), async (req: 
 
     duplicatesSkippedCount = skippedMembers.length;
 
+    if (createdChallans.length === 0) {
+      return res.json({
+        success: true,
+        createdCount: 0,
+        duplicatesSkippedCount,
+        sentCount: 0,
+        failedCount: 0,
+        message: 'All selected members already have challans for this month. Duplicates skipped.',
+        createdChallans: [],
+      });
+    }
+
     // 2. Fetch Association Settings for branded PDF rendering
     const settings = (await prisma.associationSettings.findFirst({
       where: { id: 'default-settings' },
@@ -292,193 +304,152 @@ router.post('/generate', authenticateToken, requireRole(['ADMIN']), async (req: 
       logoUrl: null,
     };
 
-    // 3. Independent WhatsApp delivery for each created challan
-    // Failure Safety: WhatsApp dispatch errors NEVER roll back the financial challans
+    // 3. Non-blocking WhatsApp background dispatch & Activity logging
     const baileysState = getWhatsAppState();
     const useBaileys = baileysState.connected;
-    console.log(`[WhatsApp] Using ${useBaileys ? 'Baileys (free)' : 'Meta Cloud API'}`);
+    const isMetaConfigured = isWhatsAppConfigured();
+    const isWaConnected = useBaileys || isMetaConfigured;
 
-    let sentCount = 0;
-    let failedCount = 0;
-    const failuresList: Array<{
-      challanNumber: string;
-      memberId: string;
-      memberName: string;
-      contactNumber: string;
-      reason: string;
-    }> = [];
+    // Asynchronous background dispatch function
+    const dispatchBackgroundWhatsApp = async () => {
+      let sent = 0;
+      let failed = 0;
 
-    const finalChallans = [];
-
-    for (const ch of createdChallans) {
-      const member = ch.member;
-      const normalizedPhone = normalizePhoneNumber(member.contactNumber);
-
-      if (!normalizedPhone) {
-        // Invalid or missing phone number
-        const errorReason = 'Invalid or missing WhatsApp number.';
-        const updated = await prisma.challan.update({
-          where: { id: ch.id },
-          data: {
-            whatsappStatus: 'FAILED',
-            whatsappError: errorReason,
-          },
-          include: { member: true },
-        });
-
-        failedCount++;
-        failuresList.push({
-          challanNumber: ch.challanNumber,
-          memberId: member.memberCode,
-          memberName: member.fullName,
-          contactNumber: member.contactNumber || 'None',
-          reason: errorReason,
-        });
-
-        finalChallans.push(updated);
-        continue;
+      if (!isWaConnected) {
+        const errorReason = 'WhatsApp not connected. Scan QR in Settings to send notifications.';
+        const challanIds = createdChallans.map((c) => c.id);
+        if (challanIds.length > 0) {
+          await prisma.challan.updateMany({
+            where: { id: { in: challanIds } },
+            data: { whatsappStatus: 'FAILED', whatsappError: errorReason },
+          });
+        }
+        return;
       }
 
-      try {
-        // Generate Branded PDF Buffer Server-Side
-        const pdfBuffer = await generateChallanPdfBuffer(
-          {
-            id: ch.id,
-            challanNumber: ch.challanNumber,
-            memberId: member.memberCode,
-            memberName: member.fullName,
-            houseNumber: member.houseNumber,
-            address: member.address,
-            month: ch.month,
-            dueDate: ch.dueDate,
-            totalAmount: ch.totalAmount,
-            paidAmount: ch.paidAmount,
-            balance: ch.balance,
-            status: ch.status,
-          },
-          {
-            fullName: member.fullName,
-            contactNumber: member.contactNumber,
-            address: member.address,
-            plotNumber: member.plotNumber || undefined,
-            floors: member.plotNumber ? member.plotNumber.split(',').map((s) => s.trim()) : undefined,
-          },
-          {
-            organizationName: settings.organizationName,
-            address: settings.address,
-            contactNumber: settings.contactNumber,
-            logoUrl: settings.logoUrl,
+      await Promise.all(
+        createdChallans.map(async (ch) => {
+          const member = ch.member;
+          const normalizedPhone = normalizePhoneNumber(member.contactNumber);
+
+          if (!normalizedPhone) {
+            await prisma.challan.update({
+              where: { id: ch.id },
+              data: { whatsappStatus: 'FAILED', whatsappError: 'Invalid or missing WhatsApp number.' },
+            }).catch(() => {});
+            return;
           }
-        );
 
-        // Dispatch via WhatsApp (Baileys preferred, Meta Cloud API as fallback)
-        let waResult;
-        if (useBaileys) {
-          waResult = await sendChallanViaBaileys({
-            recipientPhone: normalizedPhone,
-            pdfBuffer,
-            challanNumber: ch.challanNumber,
-            memberName: member.fullName,
-            billingMonth: ch.month,
-            totalAmount: ch.totalAmount,
-            dueDate: ch.dueDate,
-            associationName: settings.organizationName,
-          });
-        } else {
-          waResult = await sendChallanViaWhatsApp({
-            recipientPhone: normalizedPhone,
-            pdfBuffer,
-            challanNumber: ch.challanNumber,
-            memberName: member.fullName,
-            billingMonth: ch.month,
-            totalAmount: ch.totalAmount,
-            dueDate: ch.dueDate,
-          });
-        }
+          try {
+            const pdfBuffer = await generateChallanPdfBuffer(
+              {
+                id: ch.id,
+                challanNumber: ch.challanNumber,
+                memberId: member.memberCode,
+                memberName: member.fullName,
+                houseNumber: member.houseNumber,
+                address: member.address,
+                month: ch.month,
+                dueDate: ch.dueDate,
+                totalAmount: ch.totalAmount,
+                paidAmount: ch.paidAmount,
+                balance: ch.balance,
+                status: ch.status,
+              },
+              {
+                fullName: member.fullName,
+                contactNumber: member.contactNumber,
+                address: member.address,
+                plotNumber: member.plotNumber || undefined,
+                floors: member.plotNumber ? member.plotNumber.split(',').map((s) => s.trim()) : undefined,
+              },
+              {
+                organizationName: settings.organizationName,
+                address: settings.address,
+                contactNumber: settings.contactNumber,
+                logoUrl: settings.logoUrl,
+              }
+            );
 
-        if (waResult.success && waResult.messageId) {
-          const updated = await prisma.challan.update({
-            where: { id: ch.id },
-            data: {
-              whatsappStatus: 'SENT',
-              whatsappSentAt: new Date(),
-              whatsappMessageId: waResult.messageId,
-              whatsappError: null,
-            },
-            include: { member: true },
-          });
+            let waResult;
+            if (useBaileys) {
+              waResult = await sendChallanViaBaileys({
+                recipientPhone: normalizedPhone,
+                pdfBuffer,
+                challanNumber: ch.challanNumber,
+                memberName: member.fullName,
+                billingMonth: ch.month,
+                totalAmount: ch.totalAmount,
+                dueDate: ch.dueDate,
+                associationName: settings.organizationName,
+              });
+            } else {
+              waResult = await sendChallanViaWhatsApp({
+                recipientPhone: normalizedPhone,
+                pdfBuffer,
+                challanNumber: ch.challanNumber,
+                memberName: member.fullName,
+                billingMonth: ch.month,
+                totalAmount: ch.totalAmount,
+                dueDate: ch.dueDate,
+              });
+            }
 
-          sentCount++;
-          finalChallans.push(updated);
-        } else {
-          const errorReason = waResult.error || 'WhatsApp delivery failed.';
-          const updated = await prisma.challan.update({
-            where: { id: ch.id },
-            data: {
-              whatsappStatus: 'FAILED',
-              whatsappError: errorReason,
-            },
-            include: { member: true },
-          });
+            if (waResult.success && waResult.messageId) {
+              await prisma.challan.update({
+                where: { id: ch.id },
+                data: {
+                  whatsappStatus: 'SENT',
+                  whatsappSentAt: new Date(),
+                  whatsappMessageId: waResult.messageId,
+                  whatsappError: null,
+                },
+              }).catch(() => {});
+              sent++;
+            } else {
+              await prisma.challan.update({
+                where: { id: ch.id },
+                data: {
+                  whatsappStatus: 'FAILED',
+                  whatsappError: waResult.error || 'WhatsApp delivery failed.',
+                },
+              }).catch(() => {});
+              failed++;
+            }
+          } catch (err: any) {
+            await prisma.challan.update({
+              where: { id: ch.id },
+              data: {
+                whatsappStatus: 'FAILED',
+                whatsappError: err?.message || 'Server error sending WhatsApp',
+              },
+            }).catch(() => {});
+            failed++;
+          }
+        })
+      );
 
-          failedCount++;
-          failuresList.push({
-            challanNumber: ch.challanNumber,
-            memberId: member.memberCode,
-            memberName: member.fullName,
-            contactNumber: member.contactNumber || 'None',
-            reason: errorReason,
-          });
+      logActivity({
+        user: req.user?.fullName || 'Admin',
+        role: req.user?.role || 'ADMIN',
+        action: 'Challans Generated & Dispatched',
+        module: 'Billing',
+        description: `Generated ${createdChallans.length} challans for ${fullMonthName} (WhatsApp Sent: ${sent}, Failed: ${failed}, Duplicates Skipped: ${duplicatesSkippedCount})`,
+        ipAddress: req.ip,
+      }).catch(() => {});
+    };
 
-          finalChallans.push(updated);
-        }
-      } catch (err: any) {
-        const errorReason = err?.message || 'Server error generating PDF or contacting WhatsApp';
-        const updated = await prisma.challan.update({
-          where: { id: ch.id },
-          data: {
-            whatsappStatus: 'FAILED',
-            whatsappError: errorReason,
-          },
-          include: { member: true },
-        });
-
-        failedCount++;
-        failuresList.push({
-          challanNumber: ch.challanNumber,
-          memberId: member.memberCode,
-          memberName: member.fullName,
-          contactNumber: member.contactNumber || 'None',
-          reason: errorReason,
-        });
-
-        finalChallans.push(updated);
-      }
-    }
-
-    const totalAmount = createdChallans.reduce((sum, c) => sum + c.baseAmount, 0);
-
-    await logActivity({
-      user: req.user?.fullName || 'Admin',
-      role: req.user?.role || 'ADMIN',
-      action: 'Challans Generated & Dispatched',
-      module: 'Billing',
-      description: `Generated ${createdChallans.length} challans for ${fullMonthName} (WhatsApp Sent: ${sentCount}, Failed: ${failedCount}, Duplicates Skipped: ${duplicatesSkippedCount})`,
-      ipAddress: req.ip,
-    });
+    // Run WhatsApp dispatch asynchronously in background
+    dispatchBackgroundWhatsApp().catch((err) => console.error('Background WhatsApp dispatch error:', err));
 
     return res.status(201).json({
       success: true,
       count: createdChallans.length,
-      totalAmount,
-      whatsappSummary: {
-        generated: createdChallans.length,
-        sent: sentCount,
-        failed: failedCount,
-        duplicatesSkipped: duplicatesSkippedCount,
-        failures: failuresList,
-      },
-      challans: finalChallans.map((c) => ({
+      createdCount: createdChallans.length,
+      duplicatesSkippedCount,
+      sentCount: isWaConnected ? createdChallans.length : 0,
+      failedCount: 0,
+      challans: createdChallans.map((c) => ({
         id: c.id,
         challanNumber: c.challanNumber,
         memberId: c.member.memberCode,

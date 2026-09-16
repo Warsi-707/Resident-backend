@@ -50,9 +50,10 @@ async function calculateMemberFinancials(memberId: string) {
 router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<any> => {
   try {
     const members = await prisma.member.findMany({
-      orderBy: { memberCode: 'asc' },
+      orderBy: [{ createdAt: 'desc' }, { memberCode: 'desc' }],
       include: {
         challans: {
+          where: { balance: { gt: 0 } },
           select: {
             id: true,
             monthKey: true,

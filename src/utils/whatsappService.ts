@@ -112,9 +112,12 @@ export async function getWhatsAppCredentials(): Promise<{
  */
 export function isWhatsAppConfigured(): boolean {
   dotenv.config();
-  const token = process.env.WHATSAPP_ACCESS_TOKEN?.trim() || 'sandbox';
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() || '1092837482910';
-  return Boolean(token && phoneId);
+  const token = process.env.WHATSAPP_ACCESS_TOKEN?.trim();
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
+  if (!token || !phoneId) return false;
+  const t = token.toLowerCase();
+  if (t === 'sandbox' || t === 'demo' || t === 'test') return false;
+  return true;
 }
 
 /**

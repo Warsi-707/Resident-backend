@@ -17,6 +17,13 @@ router.post('/login', async (req, res): Promise<any> => {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
+    if (process.env.VERCEL && (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('localhost') || process.env.DATABASE_URL.includes('127.0.0.1'))) {
+      return res.status(500).json({
+        error: 'DATABASE_URL_MISSING',
+        message: 'Vercel me DATABASE_URL set nahi hai. Vercel Dashboard -> Settings -> Environment Variables me Neon URL add karein.'
+      });
+    }
+
     // Ensure database tables and default admin exist
     await ensureDatabaseInitialized().catch((initErr) => {
       console.warn('[Auth] Database init check skipped or failed:', initErr?.message);
